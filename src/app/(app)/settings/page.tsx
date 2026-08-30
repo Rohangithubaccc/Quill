@@ -22,6 +22,28 @@ const DEFAULT_BRAND_KNOWLEDGE: BrandKnowledge = {
   bannedPhrases: [''],
 }
 
+// ── BYOK provider presets ────────────────────────────────────────────────
+// Convenience layer only — every one of these ultimately stores either
+// 'anthropic' (native Messages API) or 'openai_compatible' (generic, via
+// baseUrl) in the database. Presets just pre-fill the base URL and give
+// people a recognizable name to pick instead of hand-typing an endpoint.
+// 'custom' covers anything not listed — any endpoint that speaks the
+// OpenAI chat-completions protocol works, not just these five.
+const BYOK_PRESETS = [
+  { key: 'anthropic', label: 'Anthropic (Claude)', dbProvider: 'anthropic' as const,
+    baseUrl: null, modelPlaceholder: 'claude-sonnet-4-20250514', keyPlaceholder: 'sk-ant-api03-…' },
+  { key: 'openai', label: 'OpenAI', dbProvider: 'openai_compatible' as const,
+    baseUrl: 'https://api.openai.com/v1', modelPlaceholder: 'gpt-4o', keyPlaceholder: 'sk-…' },
+  { key: 'gemini', label: 'Google Gemini', dbProvider: 'openai_compatible' as const,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', modelPlaceholder: 'gemini-2.0-flash', keyPlaceholder: 'AIza…' },
+  { key: 'nvidia', label: 'NVIDIA NIM', dbProvider: 'openai_compatible' as const,
+    baseUrl: 'https://integrate.api.nvidia.com/v1', modelPlaceholder: 'nvidia/llama-3.1-nemotron-70b-instruct', keyPlaceholder: 'nvapi-…' },
+  { key: 'groq', label: 'Groq', dbProvider: 'openai_compatible' as const,
+    baseUrl: 'https://api.groq.com/openai/v1', modelPlaceholder: 'llama-3.3-70b-versatile', keyPlaceholder: 'gsk_…' },
+  { key: 'custom', label: 'Custom (OpenAI-compatible)', dbProvider: 'openai_compatible' as const,
+    baseUrl: '', modelPlaceholder: 'model-name', keyPlaceholder: 'API key' },
+] as const
+
 interface Workspace {
   id: string; name: string; slug: string; plan: string
   usage_count: number; usage_limit: number
@@ -126,10 +148,13 @@ function SettingsPageInner() {
 
   // ── BYOK (Bring Your Own Key) state ────────────────────────────────────
   const [byokStatus, setByokStatus] = useState<{
-    configured: boolean; useOwnKey: boolean; addedAt: string|null
-    lastError: string|null; lastErrorAt: string|null
+    configured: boolean; useOwnKey: boolean; provider: string|null; baseUrl: string|null; model: string|null
+    addedAt: string|null; lastError: string|null; lastErrorAt: string|null
   } | null>(null)
+  const [byokPresetKey, setByokPresetKey] = useState('anthropic')
   const [byokKeyInput,  setByokKeyInput]  = useState('')
+  const [byokBaseUrl,   setByokBaseUrl]   = useState('')
+  const [byokModel,     setByokModel]     = useState('')
   const [byokShowInput, setByokShowInput] = useState(false)
   const [byokSaving,    setByokSaving]    = useState(false)
   const [byokRemoving,  setByokRemoving]  = useState(false)
@@ -319,18 +344,25 @@ function SettingsPageInner() {
   }
 
   async function saveByokKey() {
-    if (!byokKeyInput.trim()) return
+    if (!byokKeyInput.trim() || !byokModel.trim()) return
+    const preset = BYOK_PRESETS.find(p => p.key === byokPresetKey) ?? BYOK_PRESETS[0]
+    if (preset.dbProvider === 'openai_compatible' && !byokBaseUrl.trim()) return
+
     setByokSaving(true)
     const res = await fetch('/api/workspace/byok', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey: byokKeyInput.trim() }),
+      body: JSON.stringify(
+        preset.dbProvider === 'anthropic'
+          ? { provider: 'anthropic', apiKey: byokKeyInput.trim(), model: byokModel.trim() }
+          : { provider: 'openai_compatible', apiKey: byokKeyInput.trim(), baseUrl: byokBaseUrl.trim(), model: byokModel.trim() }
+      ),
     })
     const d = await res.json().catch(() => ({}))
     setByokSaving(false)
     if (!res.ok) { showToast(d.error ?? 'Could not validate this key', 'error'); return }
-    showToast('Anthropic key connected — generations now run on your account.', 'success')
-    setByokKeyInput('')
+    showToast(`${preset.label} key connected — generations now run on your account.`, 'success')
+    setByokKeyInput(''); setByokBaseUrl(''); setByokModel('')
     setByokShowInput(false)
     fetch('/api/workspace/byok').then(r=>r.ok?r.json():null).then(d=>{ if(d) setByokStatus(d) })
   }
@@ -343,7 +375,7 @@ function SettingsPageInner() {
     setPendingConfirm(null)
     if (!res.ok) { showToast('Could not remove key','error'); return }
     showToast('Key removed — generations now run on Quill.AI\'s platform key.', 'info')
-    setByokStatus({ configured:false, useOwnKey:false, addedAt:null, lastError:null, lastErrorAt:null })
+    setByokStatus({ configured:false, useOwnKey:false, provider:null, baseUrl:null, model:null, addedAt:null, lastError:null, lastErrorAt:null })
   }
 
   async function fetchAll() {
@@ -621,7 +653,7 @@ function SettingsPageInner() {
         }
       case 'byok-remove':
         return {
-          title: 'Remove your Anthropic API key?',
+          title: 'Remove your API key?',
           description: 'Future generations will run on Quill.AI\'s shared platform key and count against your plan\'s credits instead of your own key.',
           confirmLabel: 'Remove Key',
           loading: byokRemoving,
@@ -1102,10 +1134,10 @@ function SettingsPageInner() {
 
         {/* RIGHT */}
         <div>
-          {/* BYOK — Bring Your Own Anthropic Key */}
+          {/* BYOK — Bring Your Own AI Provider Key */}
           <div style={S.card}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'6px' }}>
-              <div style={{ fontSize:'11px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.1em', color:'#7c7c9a' }}>Anthropic API Key</div>
+              <div style={{ fontSize:'11px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.1em', color:'#7c7c9a' }}>AI Provider API Key</div>
               {byokStatus?.useOwnKey && (
                 <span style={{ fontSize:'10px', fontWeight:700, color:'#3ecf8e', background:'rgba(62,207,142,0.12)', borderRadius:'4px', padding:'2px 8px', letterSpacing:'0.04em' }}>
                   ACTIVE — YOUR KEY
@@ -1113,7 +1145,7 @@ function SettingsPageInner() {
               )}
             </div>
             <p style={{ fontSize:'12px', color:'#7c7c9a', marginBottom:'14px', lineHeight:1.5 }}>
-              Optional. Connect your own Anthropic API key to run content generation on your own Anthropic account instead of Quill.AI&rsquo;s. Generations on your key don&rsquo;t use your plan&rsquo;s credits.
+              Optional. Connect your own API key — Anthropic, OpenAI, Google Gemini, NVIDIA NIM, Groq, or any other OpenAI-compatible endpoint — to run content generation on your own account instead of Quill.AI&rsquo;s. Generations on your key don&rsquo;t use your plan&rsquo;s credits.
             </p>
 
             {byokStatus?.lastError && (
@@ -1127,16 +1159,21 @@ function SettingsPageInner() {
               <div style={{ fontSize:'12px', color:'#7c7c9a' }}>
                 {byokStatus?.configured
                   ? 'A BYOK key is configured for this workspace. Only the owner can change it.'
-                  : 'Only the workspace owner can configure a BYOK Anthropic key.'}
+                  : 'Only the workspace owner can configure a BYOK API key.'}
               </div>
             ) : byokStatus?.configured ? (
               <div>
                 <div style={{ display:'flex', alignItems:'center', gap:'10px', background:'#0f0f13', border:'1px solid #2a2a3a', borderRadius:'8px', padding:'10px 12px', marginBottom:'12px' }}>
                   <span style={{ fontSize:'16px' }}>🔑</span>
                   <div style={{ flex:1 }}>
-                    <div style={{ fontSize:'13px', fontWeight:600 }}>Key connected</div>
+                    <div style={{ fontSize:'13px', fontWeight:600 }}>
+                      {BYOK_PRESETS.find(p => p.dbProvider === byokStatus.provider && (p.dbProvider === 'anthropic' || p.baseUrl === byokStatus.baseUrl))?.label
+                        ?? (byokStatus.provider === 'anthropic' ? 'Anthropic (Claude)' : 'Custom (OpenAI-compatible)')}
+                      {' — '}{byokStatus.model}
+                    </div>
                     <div style={{ fontSize:'11px', color:'#7c7c9a' }}>
-                      {byokStatus.addedAt ? `Added ${new Date(byokStatus.addedAt).toLocaleDateString()}` : 'sk-ant-••••••••'}
+                      {byokStatus.addedAt ? `Added ${new Date(byokStatus.addedAt).toLocaleDateString()}` : 'Key connected'}
+                      {byokStatus.baseUrl ? ` · ${byokStatus.baseUrl}` : ''}
                     </div>
                   </div>
                 </div>
@@ -1146,23 +1183,64 @@ function SettingsPageInner() {
               </div>
             ) : byokShowInput ? (
               <div>
+                <select
+                  value={byokPresetKey}
+                  onChange={e => {
+                    const key = e.target.value
+                    setByokPresetKey(key)
+                    const preset = BYOK_PRESETS.find(p => p.key === key)
+                    setByokBaseUrl(preset?.baseUrl ?? '')
+                  }}
+                  style={{ ...S.select, marginBottom:'10px' }}
+                >
+                  {BYOK_PRESETS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+                </select>
+
+                {BYOK_PRESETS.find(p => p.key === byokPresetKey)?.dbProvider === 'openai_compatible' && (
+                  <input
+                    type="text"
+                    value={byokBaseUrl}
+                    onChange={e => setByokBaseUrl(e.target.value)}
+                    placeholder="Base URL, e.g. https://api.openai.com/v1"
+                    style={{ ...S.input, marginBottom:'10px' }}
+                    onFocus={e => (e.target.style.borderColor='#6c63ff')} onBlur={e => (e.target.style.borderColor='#2a2a3a')}
+                  />
+                )}
+
+                <input
+                  type="text"
+                  value={byokModel}
+                  onChange={e => setByokModel(e.target.value)}
+                  placeholder={`Model, e.g. ${BYOK_PRESETS.find(p => p.key === byokPresetKey)?.modelPlaceholder ?? 'model-name'}`}
+                  style={{ ...S.input, marginBottom:'10px' }}
+                  onFocus={e => (e.target.style.borderColor='#6c63ff')} onBlur={e => (e.target.style.borderColor='#2a2a3a')}
+                />
+
                 <input
                   type="password"
                   value={byokKeyInput}
                   onChange={e => setByokKeyInput(e.target.value)}
-                  placeholder="sk-ant-api03-…"
+                  placeholder={BYOK_PRESETS.find(p => p.key === byokPresetKey)?.keyPlaceholder ?? 'API key'}
                   style={{ ...S.input, marginBottom:'10px' }}
                   onFocus={e => (e.target.style.borderColor='#6c63ff')} onBlur={e => (e.target.style.borderColor='#2a2a3a')}
                 />
+
                 <div style={{ display:'flex', gap:'8px' }}>
-                  <button onClick={saveByokKey} disabled={byokSaving || !byokKeyInput.trim()} style={{ ...S.btnPrimary, flex:1, opacity: byokSaving || !byokKeyInput.trim() ? 0.6 : 1 }}>
+                  <button
+                    onClick={saveByokKey}
+                    disabled={
+                      byokSaving || !byokKeyInput.trim() || !byokModel.trim() ||
+                      (BYOK_PRESETS.find(p => p.key === byokPresetKey)?.dbProvider === 'openai_compatible' && !byokBaseUrl.trim())
+                    }
+                    style={{ ...S.btnPrimary, flex:1, opacity: byokSaving ? 0.6 : 1 }}
+                  >
                     {byokSaving ? 'Validating…' : 'Connect key'}
                   </button>
-                  <button onClick={() => { setByokShowInput(false); setByokKeyInput('') }} style={S.btnGhost}>Cancel</button>
+                  <button onClick={() => { setByokShowInput(false); setByokKeyInput(''); setByokBaseUrl(''); setByokModel('') }} style={S.btnGhost}>Cancel</button>
                 </div>
               </div>
             ) : (
-              <button onClick={() => setByokShowInput(true)} style={S.btnGhost}>+ Connect your Anthropic key</button>
+              <button onClick={() => setByokShowInput(true)} style={S.btnGhost}>+ Connect your own API key</button>
             )}
           </div>
 

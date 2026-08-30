@@ -12,7 +12,7 @@ import { jsonError, jsonOk, workspaceCatch } from '@/lib/utils'
 // bulkRepurpose function in src/inngest/functions.ts.
 //
 // The Inngest function:
-//   - Generates each repurpose type sequentially (avoids parallel Anthropic rate limits)
+//   - Generates each repurpose type sequentially (avoids parallel rate limits against whichever provider is resolved)
 //   - Saves each as a new content_pieces row (parent_id = source)
 //   - Updates a job_results row on completion
 //
@@ -135,7 +135,7 @@ export async function POST(req: NextRequest) {
 
   // ── 6. Deduct credits upfront ──────────────────────────────────────────────
   // Deducted before queuing — the Inngest function itself never deducts.
-  // It DOES refund, though: any type that fails (Anthropic call or the DB
+  // It DOES refund, though: any type that fails (the AI call or the DB
   // insert) gets its CREDITS_PER_TYPE refunded in a 'refund-failed-types'
   // step after the batch finishes, so paying for 5 and getting 3 means a
   // refund for the 2 that didn't land, not a silent loss. See

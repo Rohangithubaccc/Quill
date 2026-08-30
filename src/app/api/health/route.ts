@@ -15,11 +15,12 @@ export async function GET(req: NextRequest) {
     checks.database = 'error'
   }
 
-  // ── Anthropic check (minimal — just verify env var is set) ────────────
+  // ── Platform AI provider check (minimal — just verify env vars are set) ─
   // We don't make an actual API call on every health check (too expensive).
-  // Just verify the key is configured. A failed generation would surface
-  // Anthropic issues via Sentry anyway.
-  checks.anthropic = process.env.ANTHROPIC_API_KEY ? 'ok' : 'error'
+  // Just verify config is present. Provider-agnostic now — whichever
+  // provider PLATFORM_AI_PROVIDER points at (defaults to 'anthropic'). A
+  // failed generation would surface real provider issues via Sentry anyway.
+  checks.platformAi = process.env.PLATFORM_AI_API_KEY && process.env.PLATFORM_AI_MODEL ? 'ok' : 'error'
 
   // ── Supabase env check ────────────────────────────────────────────────
   checks.supabase_config =

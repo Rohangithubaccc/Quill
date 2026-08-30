@@ -216,6 +216,7 @@ export type Database = {
           created_at: string
           fallback_reason: string | null
           id: string
+          provider: string | null
           route: string
           used_byok: boolean
           workspace_id: string
@@ -224,6 +225,7 @@ export type Database = {
           created_at?: string
           fallback_reason?: string | null
           id?: string
+          provider?: string | null
           route: string
           used_byok: boolean
           workspace_id: string
@@ -232,6 +234,7 @@ export type Database = {
           created_at?: string
           fallback_reason?: string | null
           id?: string
+          provider?: string | null
           route?: string
           used_byok?: boolean
           workspace_id?: string
@@ -1233,15 +1236,18 @@ export type Database = {
       }
       workspaces: {
         Row: {
-          anthropic_api_key_encrypted: string | null
-          anthropic_key_added_at: string | null
-          anthropic_key_last_error: string | null
-          anthropic_key_last_error_at: string | null
-          anthropic_key_last_validated_at: string | null
           brand_company_name: string | null
           brand_knowledge: Json | null
           brand_primary_color: string | null
           brand_voice: string | null
+          byok_api_key_encrypted: string | null
+          byok_base_url: string | null
+          byok_key_added_at: string | null
+          byok_key_last_error: string | null
+          byok_key_last_error_at: string | null
+          byok_key_last_validated_at: string | null
+          byok_model: string | null
+          byok_provider: string | null
           created_at: string
           credits_monthly: number
           credits_remaining: number
@@ -1264,19 +1270,22 @@ export type Database = {
           trial_ends_at: string | null
           usage_count: number
           usage_limit: number
-          use_own_anthropic_key: boolean
+          use_own_ai_key: boolean
           white_label_enabled: boolean
         }
         Insert: {
-          anthropic_api_key_encrypted?: string | null
-          anthropic_key_added_at?: string | null
-          anthropic_key_last_error?: string | null
-          anthropic_key_last_error_at?: string | null
-          anthropic_key_last_validated_at?: string | null
           brand_company_name?: string | null
           brand_knowledge?: Json | null
           brand_primary_color?: string | null
           brand_voice?: string | null
+          byok_api_key_encrypted?: string | null
+          byok_base_url?: string | null
+          byok_key_added_at?: string | null
+          byok_key_last_error?: string | null
+          byok_key_last_error_at?: string | null
+          byok_key_last_validated_at?: string | null
+          byok_model?: string | null
+          byok_provider?: string | null
           created_at?: string
           credits_monthly?: number
           credits_remaining?: number
@@ -1299,19 +1308,22 @@ export type Database = {
           trial_ends_at?: string | null
           usage_count?: number
           usage_limit?: number
-          use_own_anthropic_key?: boolean
+          use_own_ai_key?: boolean
           white_label_enabled?: boolean
         }
         Update: {
-          anthropic_api_key_encrypted?: string | null
-          anthropic_key_added_at?: string | null
-          anthropic_key_last_error?: string | null
-          anthropic_key_last_error_at?: string | null
-          anthropic_key_last_validated_at?: string | null
           brand_company_name?: string | null
           brand_knowledge?: Json | null
           brand_primary_color?: string | null
           brand_voice?: string | null
+          byok_api_key_encrypted?: string | null
+          byok_base_url?: string | null
+          byok_key_added_at?: string | null
+          byok_key_last_error?: string | null
+          byok_key_last_error_at?: string | null
+          byok_key_last_validated_at?: string | null
+          byok_model?: string | null
+          byok_provider?: string | null
           created_at?: string
           credits_monthly?: number
           credits_remaining?: number
@@ -1334,7 +1346,7 @@ export type Database = {
           trial_ends_at?: string | null
           usage_count?: number
           usage_limit?: number
-          use_own_anthropic_key?: boolean
+          use_own_ai_key?: boolean
           white_label_enabled?: boolean
         }
         Relationships: []

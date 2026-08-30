@@ -2,13 +2,14 @@ import { NextRequest } from 'next/server'
 import { requireUser, requireWorkspace } from '@/lib/supabase/server'
 import { jsonError, workspaceCatch, countWords } from '@/lib/utils'
 import { z } from 'zod'
-import { getAnthropicClientForWorkspace } from '@/lib/anthropic-byok'
+import { getAIClientForWorkspace } from '@/lib/ai-byok'
 import { getLimiter, checkLimit, rateLimitResponse } from '@/lib/rate-limit'
 
 // This endpoint has no credit-based cost control at all (see comment
-// below), and for BYOK workspaces getAnthropicClientForWorkspace() skips
+// below), and for BYOK workspaces getAIClientForWorkspace() skips
 // the platform key entirely — so without this, a workspace could call
-// Claude here at unlimited rate with zero throttling of any kind.
+// its configured provider here at unlimited rate with zero throttling of
+// any kind.
 const humanizeLimiter = getLimiter('rl:humanize:user', 20, '1 h')
 
 // ── Input validation ──────────────────────────────────────────────────────────
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
   }
   const { content } = parsed.data
 
-  const { client: anthropic } = await getAnthropicClientForWorkspace(ws.id, 'ai/humanize')
+  const { client: ai, model } = await getAIClientForWorkspace(ws.id, 'ai/humanize')
 
   // ── 3. Stream humanized content ───────────────────────────────────────────
   const encoder = new TextEncoder()
@@ -111,26 +112,23 @@ export async function POST(req: NextRequest) {
   const readable = new ReadableStream({
     async start(controller) {
       try {
-        const stream = anthropic.messages.stream({
-          model: 'claude-sonnet-4-20250514',
+        const stream = ai.streamCompletion({
+          model,
           // 6000, not 2048 — same fix as ai/generate/route.ts, same
           // reasoning: this rewrites existing content, which can now be up
           // to ~3000 words (the generator's own word-count ceiling), and a
           // humanized rewrite is expected to land close to the original
           // length, not shrink to fit an unrelated token budget.
-          max_tokens: 6000,
-          messages:   [{ role: 'user', content: buildHumanizePrompt(content) }],
+          maxTokens: 6000,
+          messages:  [{ role: 'user', content: buildHumanizePrompt(content) }],
         })
 
         for await (const event of stream) {
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          ) {
-            fullText += event.delta.text
+          if (event.type === 'text_delta') {
+            fullText += event.text
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({ type: 'text', text: event.delta.text })}\n\n`
+                `data: ${JSON.stringify({ type: 'text', text: event.text })}\n\n`
               )
             )
           }

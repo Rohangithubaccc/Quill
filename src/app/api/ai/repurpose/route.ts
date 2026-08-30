@@ -3,7 +3,7 @@ import { createSupabaseAdmin, requireUser, requireWorkspace } from '@/lib/supaba
 import { jsonError, workspaceCatch, countWords } from '@/lib/utils'
 import { getCreditCost, getUpgradeMessage }                   from '@/lib/credits'
 import { buildRepurposePrompt, REPURPOSE_TYPES, REPURPOSE_LABELS, type RepurposeType } from '@/lib/repurpose-prompts'
-import { getAnthropicClientForWorkspace }                     from '@/lib/anthropic-byok'
+import { getAIClientForWorkspace }                            from '@/lib/ai-byok'
 import { getLimiter, checkLimit, rateLimitResponse }          from '@/lib/rate-limit'
 
 // Credits normally throttle this (see creditCost below), but BYOK
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 3. Credit check (repurpose always costs 5 credits) ───────────────────
-  const { client: anthropic, isByok } = await getAnthropicClientForWorkspace(ws.id, 'ai/repurpose')
+  const { client: ai, isByok, model } = await getAIClientForWorkspace(ws.id, 'ai/repurpose')
   const creditCost = isByok ? 0 : getCreditCost('', 'repurpose')   // always 5, unless BYOK
 
   if (!isByok && (ws as any).credits_remaining < creditCost) {
@@ -89,21 +89,21 @@ export async function POST(req: NextRequest) {
   const readable = new ReadableStream({
     async start(controller) {
       try {
-        const anthropicStream = anthropic.messages.stream({
-          model: 'claude-sonnet-4-20250514',
+        const aiStream = ai.streamCompletion({
+          model,
           // 6000, not 2048 — same fix as ai/generate/route.ts. Not every
           // repurpose target is short (Twitter thread, social caption) —
           // email newsletter and blog-style targets can run long, and the
           // source content itself can now be up to ~3000 words.
-          max_tokens: 6000,
-          messages:   [{ role: 'user', content: prompt }],
+          maxTokens: 6000,
+          messages:  [{ role: 'user', content: prompt }],
         })
 
-        for await (const event of anthropicStream) {
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            fullText += event.delta.text
+        for await (const event of aiStream) {
+          if (event.type === 'text_delta') {
+            fullText += event.text
             controller.enqueue(encoder.encode(
-              `data: ${JSON.stringify({ type: 'text', text: event.delta.text })}\n\n`
+              `data: ${JSON.stringify({ type: 'text', text: event.text })}\n\n`
             ))
           }
         }

@@ -12,7 +12,7 @@ export const maxDuration = 30
 //   - integrations.config       — encrypted third-party credentials
 //                                  (WordPress app password, Buffer tokens)
 //   - webhook_endpoints.secret  — encrypted HMAC signing secret
-//   - workspaces.anthropic_api_key_encrypted and related BYOK columns
+//   - workspaces.byok_api_key_encrypted and related BYOK columns
 //   - knowledge_chunks          — embedding vectors, not personal data,
 //                                  and large; the parent knowledge_documents
 //                                  row (filename, type, status) is included

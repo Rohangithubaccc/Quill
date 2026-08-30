@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { buildPrompt, countWords } from '@/lib/utils'
-import { getAnthropicClientForWorkspace } from '@/lib/anthropic-byok'
+import { getAIClientForWorkspace } from '@/lib/ai-byok'
 import { getLimiter, checkLimit } from '@/lib/rate-limit'
 
 // Per-IP limiter: 1 demo per IP per 24 hours
@@ -232,15 +232,16 @@ export async function POST(req: NextRequest) {
     platforms:   [],
   })
 
-  // ── 10. Stream from Anthropic — max_tokens capped at 800 for cost control
-  // No workspace context on this public route, so this always resolves to
-  // the platform key — routed through the same helper as every other AI
-  // call site for consistency (and so BYOK plumbing has one entry point).
-  const { client: anthropic } = await getAnthropicClientForWorkspace(null, 'demo/generate')
-  const stream = anthropic.messages.stream({
-    model:      'claude-sonnet-4-20250514',
-    max_tokens: 800,
-    messages:   [{ role: 'user', content: prompt }],
+  // ── 10. Stream from the resolved provider — max_tokens capped at 800 for
+  // cost control. No workspace context on this public route, so this
+  // always resolves to the platform key — routed through the same helper
+  // as every other AI call site for consistency (and so BYOK plumbing has
+  // one entry point).
+  const { client: ai, model } = await getAIClientForWorkspace(null, 'demo/generate')
+  const stream = ai.streamCompletion({
+    model,
+    maxTokens: 800,
+    messages:  [{ role: 'user', content: prompt }],
   })
 
   // ── 11. Return SSE stream (no DB writes — ephemeral) ──────────────────
@@ -252,8 +253,8 @@ export async function POST(req: NextRequest) {
 
       try {
         for await (const event of stream) {
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            const text = event.delta.text
+          if (event.type === 'text_delta') {
+            const text = event.text
             fullText  += text
             wordCount  = countWords(fullText)
 

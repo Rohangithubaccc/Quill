@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { createSupabaseAdmin, requireUser, requireWorkspace } from '@/lib/supabase/server'
 import { jsonError, jsonOk, workspaceCatch } from '@/lib/utils'
-import { getAnthropicClientForWorkspace }                     from '@/lib/anthropic-byok'
+import { getAIClientForWorkspace }                            from '@/lib/ai-byok'
 const VALID_PLATFORMS = ['twitter','linkedin','instagram','reddit','tiktok']
 const VALID_RANGES    = ['7d','30d','90d']
 const CACHE_TTL_HOURS = 6
@@ -269,14 +269,14 @@ STRICT RULES:
   let trendData: TrendData
 
   try {
-    const { client: anthropic } = await getAnthropicClientForWorkspace(workspace.id, 'analyzer/trends')
-    const message = await anthropic.messages.create({
-      model:      'claude-sonnet-4-20250514',
-      max_tokens: 1400,
-      messages:   [{ role: 'user', content: prompt }],
+    const { client: ai, model } = await getAIClientForWorkspace(workspace.id, 'analyzer/trends')
+    const message = await ai.createCompletion({
+      model,
+      maxTokens: 1400,
+      messages:  [{ role: 'user', content: prompt }],
     })
 
-    const raw    = message.content[0]?.type === 'text' ? message.content[0].text : ''
+    const raw    = message.text
     const jsonStr = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
     trendData = JSON.parse(jsonStr) as TrendData
 

@@ -1,15 +1,16 @@
 import { inngest } from './client'
 import { countWords } from '@/lib/utils'
 import { createSupabaseAdmin } from '@/lib/supabase/server'
-import { getAnthropicClientForWorkspace } from '@/lib/anthropic-byok'
+import { getAIClientForWorkspace } from '@/lib/ai-byok'
 import { storageLimitMessage } from '@/lib/storage-quota'
 import { OPERATION_CREDITS } from '@/lib/credits'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Anthropic client resolution
+// AI client resolution
 // Server-side only — this file is never bundled for the browser. Each job
-// resolves its own client via getAnthropicClientForWorkspace() so BYOK
-// workspaces run their async jobs (bulk repurpose, etc.) on their own key too.
+// resolves its own client via getAIClientForWorkspace() so BYOK
+// workspaces run their async jobs (bulk repurpose, etc.) on their own
+// provider and model too.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,18 +157,18 @@ export const bulkRepurpose = inngest.createFunction(
             title:       source.title       ?? 'Untitled',
           })
 
-          // Call Anthropic — not streamed because we're running server-side
-          const { client: anthropic } = await getAnthropicClientForWorkspace(workspaceId, 'inngest/bulk-repurpose')
-          const msg = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
+          // Call the resolved provider — not streamed because we're running server-side
+          const { client: ai, model } = await getAIClientForWorkspace(workspaceId, 'inngest/bulk-repurpose')
+          const msg = await ai.createCompletion({
+            model,
             // 6000, not 2048 — same fix as the single-repurpose route
             // (same underlying prompt logic, just batched).
-            max_tokens: 6000,
-            messages:   [{ role: 'user', content: prompt }],
+            maxTokens: 6000,
+            messages:  [{ role: 'user', content: prompt }],
           })
 
-          const text = msg.content[0]?.type === 'text' ? msg.content[0].text : ''
-          if (!text) throw new Error(`Empty response from Anthropic for repurpose type: ${rType}`)
+          const text = msg.text
+          if (!text) throw new Error(`Empty response from provider for repurpose type: ${rType}`)
 
           const wordCount = countWords(text)
 

@@ -4,7 +4,7 @@ import { createSupabaseAdmin, requireUser, requireWorkspace } from '@/lib/supaba
 import { jsonError, buildPrompt, estimateCost, workspaceCatch, countWords } from '@/lib/utils'
 import { getCreditCost, getUpgradeMessage }                   from '@/lib/credits'
 import { dispatchWebhook }                                    from '@/lib/webhooks'
-import { getAnthropicClientForWorkspace }                     from '@/lib/anthropic-byok'
+import { getAIClientForWorkspace }                            from '@/lib/ai-byok'
 import { getLimiter, checkLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 const QUALITY_THRESHOLD = 60
@@ -64,10 +64,13 @@ export async function POST(req: NextRequest) {
     return workspaceCatch(e)
   }
 
-  // Resolve which Anthropic client this generation runs on. BYOK workspaces
-  // run on their own Anthropic account, so Quill.AI credits are not spent —
-  // creditCost is forced to 0 below when isByok is true.
-  const { client: anthropic, isByok } = await getAnthropicClientForWorkspace(ws.id, 'ai/generate')
+  // Resolve which AI client (and model) this generation runs on. BYOK
+  // workspaces run on their own provider account at their own chosen model,
+  // so Quill.AI credits are not spent — creditCost is forced to 0 below
+  // when isByok is true. 'claude-sonnet-4-20250514' is the platform
+  // default for this specific route; the scoring sub-call below uses a
+  // separate, cheaper default of its own on the non-BYOK path.
+  const { client: ai, isByok, model } = await getAIClientForWorkspace(ws.id, 'ai/generate')
 
   // Determine cost BEFORE the check so the 402 response carries it
   const creditCost = isByok ? 0 : getCreditCost(body.contentType, 'generate')
@@ -187,19 +190,18 @@ export async function POST(req: NextRequest) {
 
   if (pieceErr || !piece) return jsonError('Failed to create content record', 500)
 
-  // ── 9. Stream from Anthropic ─────────────────────────────────────────────
-  const MODEL = 'claude-sonnet-4-20250514'
+  // ── 9. Stream from the resolved provider ─────────────────────────────────
   const encoder = new TextEncoder()
   let fullText     = ''
   let inputTokens  = 0
   let outputTokens = 0
-  let stopReason: string | null = null
+  let stopReason: 'max_tokens' | 'end_turn' | 'other' = 'other'
 
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const anthropicStream = anthropic.messages.stream({
-          model: MODEL,
+        const aiStream = ai.streamCompletion({
+          model,
           // 6000, not the original 2048 — found during the AI-output-
           // quality review: the wordCount slider in the generator UI goes
           // up to 3000 words (generator/page.tsx, input max={3000}), but
@@ -212,28 +214,25 @@ export async function POST(req: NextRequest) {
           // instruction above explicitly asks for — with zero detection:
           // full credit charge, no warning, quality-scored on a
           // fragment. 6000 covers 3000 words with real formatting
-          // overhead margin. stop_reason is now captured below as a
+          // overhead margin. stopReason is now captured below as a
           // second layer, in case an unusually formatting-heavy request
           // still hits the ceiling despite the higher limit.
-          max_tokens: 6000,
-          messages:   [{ role: 'user', content: prompt }],
+          maxTokens: 6000,
+          messages:  [{ role: 'user', content: prompt }],
         })
 
-        for await (const event of anthropicStream) {
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            fullText += event.delta.text
+        for await (const event of aiStream) {
+          if (event.type === 'text_delta') {
+            fullText += event.text
             controller.enqueue(encoder.encode(
-              `data: ${JSON.stringify({ type: 'text', text: event.delta.text })}\n\n`
+              `data: ${JSON.stringify({ type: 'text', text: event.text })}\n\n`
             ))
           }
-          if (event.type === 'message_delta'  && event.usage) {
-            outputTokens = event.usage.output_tokens
-            // Anthropic sets this on the same event once the stream
-            // concludes — 'max_tokens' means genuinely cut off, 'end_turn'
-            // (or other normal values) means it finished on its own.
-            if (event.delta.stop_reason) stopReason = event.delta.stop_reason
+          if (event.type === 'done') {
+            inputTokens  = event.usage.inputTokens
+            outputTokens = event.usage.outputTokens
+            stopReason   = event.stopReason
           }
-          if (event.type === 'message_start'  && event.message.usage) inputTokens  = event.message.usage.input_tokens
         }
 
         const wasTruncated = stopReason === 'max_tokens'
@@ -242,7 +241,16 @@ export async function POST(req: NextRequest) {
         }
 
         // ── 9. Post-stream: persist content + deduct credits ─────────────
-        const costUsd   = estimateCost(inputTokens, outputTokens)
+        // estimateCost() prices tokens at Claude Sonnet's per-million-token
+        // rate unconditionally — accurate for the platform-key path, but
+        // meaningless for BYOK: a BYOK call might run on NVIDIA NIM, Groq,
+        // or any other provider with completely different (sometimes
+        // free-tier) pricing, and either way Quill.AI's own cost exposure
+        // for those tokens is genuinely $0 — the workspace's own provider
+        // account is billed directly, not Quill.AI. Forcing this to 0 for
+        // BYOK is the semantically correct value for a column named
+        // cost_usd, not an approximation of a real number.
+        const costUsd   = isByok ? 0 : estimateCost(inputTokens, outputTokens)
         const wordCount = countWords(fullText)
         const title     = fullText.split('\n').find(l => l.trim().length > 0)?.substring(0, 120) ?? 'Untitled'
 
@@ -299,12 +307,17 @@ Content:
 ${fullText.substring(0, 1500)}
 </content_to_evaluate>`
 
-          const scoreRes = await anthropic.messages.create({
-            model:      'claude-haiku-4-5-20251001',
-            max_tokens: 200,
-            messages:   [{ role: 'user', content: scoringPrompt }],
+          // Both the platform path and BYOK now resolve to one configured
+          // model for the whole request — reuse it for the scoring
+          // sub-call too, rather than assuming a second, cheaper model
+          // exists (see the comment in ai-byok.ts on why that per-route
+          // optimization was dropped).
+          const scoreRes = await ai.createCompletion({
+            model,
+            maxTokens: 200,
+            messages:  [{ role: 'user', content: scoringPrompt }],
           })
-          const raw = scoreRes.content[0]?.type === 'text' ? scoreRes.content[0].text.trim() : ''
+          const raw = scoreRes.text.trim()
           const jsonMatch = raw.match(/\{[\s\S]*\}/)
           const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null
 
@@ -356,7 +369,7 @@ ${fullText.substring(0, 1500)}
             user_id:       user.id,
             workspace_id:  ws.id,
             content_id:    piece.id,
-            model:         MODEL,
+            model,
             input_tokens:  inputTokens,
             output_tokens: outputTokens,
             cost_usd:      costUsd,

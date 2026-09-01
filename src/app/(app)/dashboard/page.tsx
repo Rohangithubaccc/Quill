@@ -22,6 +22,10 @@ const PLATFORM_COLORS: Record<string, string> = {
   linkedin: '#3b82f6', twitter: '#4fb3f7', instagram: '#f472b6',
   blog: '#3ecf8e', email: '#f59e42',
 }
+const PLATFORM_LABELS: Record<string, string> = {
+  linkedin: 'LinkedIn', twitter: 'Twitter', instagram: 'Instagram',
+  blog: 'Blog', email: 'Email',
+}
 
 function fmt(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
@@ -42,6 +46,9 @@ export default function DashboardPage() {
   const [trends,    setTrends]    = useState<TrendTopic[]>([])
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [loading,   setLoading]   = useState(true)
+  const [chartData, setChartData] = useState<{ blog: number[]; linkedin: number[]; twitter: number[] }>({
+    blog: [0,0,0,0,0,0,0], linkedin: [0,0,0,0,0,0,0], twitter: [0,0,0,0,0,0,0],
+  })
   const chartRef = useRef<HTMLCanvasElement>(null)
   const chartInst = useRef<unknown>(null)
 
@@ -70,6 +77,41 @@ export default function DashboardPage() {
         .eq('workspace_id', ws.id).is('deleted_at', null)
         .order('created_at', { ascending: false }).limit(7)
       setContent(pieces ?? [])
+
+      // Real last-7-calendar-days window for the chart below — genuinely
+      // separate from the query above (that one is "7 most recent pieces
+      // regardless of age", correct for the Recent Content table but
+      // wrong for a chart labeled "Last 7 Days": a workspace whose last
+      // activity was months ago would otherwise have old content
+      // misattributed to today's date column). Not row-limited, since a
+      // busy day can have more than 7 pieces total across the week.
+      const windowStart = new Date()
+      windowStart.setDate(windowStart.getDate() - 6)
+      windowStart.setHours(0, 0, 0, 0)
+      const { data: recentPieces } = await supabase
+        .from('content_pieces')
+        .select('platforms, created_at')
+        .eq('workspace_id', ws.id).is('deleted_at', null)
+        .gte('created_at', windowStart.toISOString())
+
+      const dayKeys = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(); d.setDate(d.getDate() - (6 - i))
+        return d.toISOString().slice(0, 10)
+      })
+      const counts: Record<string, { blog: number; linkedin: number; twitter: number }> = {}
+      for (const key of dayKeys) counts[key] = { blog: 0, linkedin: 0, twitter: 0 }
+      for (const piece of recentPieces ?? []) {
+        const key = (piece.created_at as string).slice(0, 10)
+        if (!counts[key]) continue
+        for (const p of (piece.platforms as string[] | null) ?? []) {
+          if (p === 'blog' || p === 'linkedin' || p === 'twitter') counts[key][p] += 1
+        }
+      }
+      setChartData({
+        blog:     dayKeys.map(k => counts[k].blog),
+        linkedin: dayKeys.map(k => counts[k].linkedin),
+        twitter:  dayKeys.map(k => counts[k].twitter),
+      })
     }
 
     const res = await fetch('/api/analyzer/trends?platform=twitter&range=7d')
@@ -94,9 +136,9 @@ export default function DashboardPage() {
         data: {
           labels,
           datasets: [
-            { label: 'Blog',     data: [2,3,2,4,3,5,4], borderColor: '#3ecf8e', backgroundColor: 'rgba(62,207,142,0.08)', tension: 0.4, fill: true, pointRadius: 3 },
-            { label: 'LinkedIn', data: [1,2,3,2,4,3,5], borderColor: '#6c63ff', backgroundColor: 'rgba(108,99,255,0.08)', tension: 0.4, fill: true, pointRadius: 3 },
-            { label: 'Twitter',  data: [3,2,1,3,2,4,3], borderColor: '#4fb3f7', backgroundColor: 'rgba(79,179,247,0.06)', tension: 0.4, fill: true, pointRadius: 3 },
+            { label: 'Blog',     data: chartData.blog,     borderColor: '#3ecf8e', backgroundColor: 'rgba(62,207,142,0.08)', tension: 0.4, fill: true, pointRadius: 3 },
+            { label: 'LinkedIn', data: chartData.linkedin, borderColor: '#6c63ff', backgroundColor: 'rgba(108,99,255,0.08)', tension: 0.4, fill: true, pointRadius: 3 },
+            { label: 'Twitter',  data: chartData.twitter,  borderColor: '#4fb3f7', backgroundColor: 'rgba(79,179,247,0.06)', tension: 0.4, fill: true, pointRadius: 3 },
           ],
         },
         options: {
@@ -111,7 +153,7 @@ export default function DashboardPage() {
     }
     if (!document.querySelector('script[src*="chart.umd"]')) document.head.appendChild(script)
     else script.onload?.(new Event('load'))
-  }, [loading])
+  }, [loading, chartData])
 
   const creditsRemaining = workspace?.credits_remaining ?? 0
   const creditsMonthly   = workspace?.credits_monthly   ?? 1
@@ -120,11 +162,37 @@ export default function DashboardPage() {
     ? Math.min(100, Math.round(((creditsMonthly - creditsRemaining) / creditsMonthly) * 100))
     : 0
 
+  const scoredPieces = content.filter(c => c.engagement_score != null)
+  const avgEngagement = scoredPieces.length > 0
+    ? scoredPieces.reduce((sum, c) => sum + (c.engagement_score ?? 0), 0) / scoredPieces.length
+    : null
+
+  const platformCounts: Record<string, number> = {}
+  for (const c of content) {
+    for (const p of c.platforms ?? []) platformCounts[p] = (platformCounts[p] ?? 0) + 1
+  }
+  const topPlatformEntry = Object.entries(platformCounts).sort((a, b) => b[1] - a[1])[0]
+  const topPlatform = topPlatformEntry?.[0] ?? null
+
+  const pendingReviewCount = content.filter(c => c.status === 'review').length
+
   const kpis = [
     { icon: '⚡', value: workspace ? creditsRemaining.toLocaleString() : '—', label: 'Credits Remaining', delta: `of ${creditsMonthly.toLocaleString()} monthly`, up: creditsRemaining > creditsMonthly * 0.2 },
-    { icon: '⚡', value: '8.4',                         label: 'Avg. Engagement Score', delta: '↑ 1.2 pts',        up: true },
-    { icon: '🏆', value: 'LinkedIn',                    label: 'Top Platform',          delta: '↑ 34% reach',      up: true },
-    { icon: '👀', value: content.filter(c => c.status==='review').length, label: 'Pending Review', delta: 'needs attention', up: false },
+    {
+      icon: '⚡',
+      value: avgEngagement != null ? avgEngagement.toFixed(1) : '—',
+      label: 'Avg. Engagement Score',
+      delta: scoredPieces.length > 0 ? `across ${scoredPieces.length} piece${scoredPieces.length === 1 ? '' : 's'}` : 'no scored content yet',
+      up: true,
+    },
+    {
+      icon: '🏆',
+      value: topPlatform ? (PLATFORM_LABELS[topPlatform] ?? topPlatform) : '—',
+      label: 'Top Platform',
+      delta: topPlatform ? `${platformCounts[topPlatform]} piece${platformCounts[topPlatform] === 1 ? '' : 's'}` : 'no content yet',
+      up: true,
+    },
+    { icon: '👀', value: pendingReviewCount, label: 'Pending Review', delta: pendingReviewCount > 0 ? 'needs attention' : 'all caught up', up: pendingReviewCount === 0 },
   ]
 
   return (

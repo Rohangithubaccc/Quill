@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { createSupabaseAdmin, createSupabaseServerClient } from '@/lib/supabase/server'
 import { cookies } from 'next/headers'
 import { slugify, jsonError, jsonOk } from '@/lib/utils'
+import { PLAN_CREDITS } from '@/lib/credits'
 import { Resend } from 'resend'
 import { getLimiter, checkLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
@@ -113,6 +114,25 @@ export async function POST(req: NextRequest) {
   // same principle as every other atomic-claim fix in this codebase,
   // just expressed as a retry loop since a slug is freely regenerable,
   // unlike a fixed resource such as a credit balance.
+  // Starter plan values, explicit — found via a real signup landing with
+  // credits_remaining: 0, credits_monthly: 0, trial_ends_at: null. This
+  // INSERT previously only set plan/usage_count/usage_limit, silently
+  // relying on the workspaces table's raw column defaults (0, 0, NULL)
+  // for everything else instead of actual Starter-plan values — meaning
+  // every real signup landed permanently unable to generate any content
+  // at all (credits_remaining < creditCost is the real gate in
+  // ai/generate/route.ts; usage_limit isn't), with no trial period
+  // despite WelcomeEmail unconditionally telling the new user they have
+  // 14 days. credits_remaining/credits_monthly come from the same
+  // PLAN_CREDITS constant every credit-deducting route already uses —
+  // "never hardcode credit values" per that file's own header comment,
+  // which this route was quietly violating by omission. usage_limit=12
+  // matches this plan's documented definition (4 blogs + 8 social posts);
+  // it isn't the actual generation gate but is shown directly in
+  // Settings, the generator page, and the dashboard, so a stale value
+  // there is a real user-facing bug too, just a less severe one.
+  const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
+
   let workspace: any = null
   let wsErr: any = null
   const MAX_SLUG_ATTEMPTS = 5
@@ -129,7 +149,11 @@ export async function POST(req: NextRequest) {
         slug: candidateSlug,
         plan: 'starter',
         usage_count: 0,
-        usage_limit: 4,
+        usage_limit: 12,
+        credits_monthly: PLAN_CREDITS.starter,
+        credits_remaining: PLAN_CREDITS.starter,
+        trial_ends_at: trialEndsAt,
+        subscription_status: 'trialing',
       })
       .select()
       .single()

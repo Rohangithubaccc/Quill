@@ -453,20 +453,38 @@ function SettingsPageInner() {
 
   async function openBillingPortal() {
     setBillingLoading(true)
-    const res = await fetch('/api/stripe/billing-portal', { method:'POST' })
-    const data = await res.json()
-    setBillingLoading(false)
-    if (data.url) { window.location.href = data.url }
-    else showToast(data.error === 'no_subscription' ? 'No active subscription yet.' : 'Could not open billing portal.', 'error')
+    try {
+      const res = await fetch('/api/stripe/billing-portal', { method:'POST' })
+      const data = await res.json()
+      if (data.url) { window.location.href = data.url; return }
+      showToast(data.error === 'no_subscription' ? 'No active subscription yet.' : (data.error ?? 'Could not open billing portal.'), 'error')
+    } catch {
+      // Found alongside the create-checkout stuck-spinner bug: res.json()
+      // itself throws if the server ever returns something that isn't
+      // valid JSON (exactly what an unhandled backend exception produces
+      // — Next.js's own error page, not a clean error body). Without this
+      // catch, that throw skips every line below it, including
+      // setBillingLoading(false), and the button stays in its loading
+      // state indefinitely with zero feedback — precisely the "only the
+      // timer icon changes" symptom reported live.
+      showToast('Could not open billing portal — please try again.', 'error')
+    } finally {
+      setBillingLoading(false)
+    }
   }
 
   async function openUpgradeCheckout(priceId: string) {
     setBillingLoading(true)
-    const res = await fetch('/api/stripe/create-checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ priceId }) })
-    const data = await res.json()
-    setBillingLoading(false)
-    if (data.url) window.location.href = data.url
-    else showToast('Could not start checkout.','error')
+    try {
+      const res = await fetch('/api/stripe/create-checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ priceId }) })
+      const data = await res.json()
+      if (data.url) { window.location.href = data.url; return }
+      showToast(data.error ?? 'Could not start checkout.', 'error')
+    } catch {
+      showToast('Could not start checkout — please try again.', 'error')
+    } finally {
+      setBillingLoading(false)
+    }
   }
 
   async function exportData() {

@@ -36,21 +36,39 @@ export async function POST(req: NextRequest) {
     await admin.from('workspaces').update({ stripe_customer_id: customerId }).eq('id', workspace.id)
   }
 
-  const session = await getStripe().checkout.sessions.create({
-    customer: customerId,
-    mode: 'subscription',
-    line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${process.env.NEXT_PUBLIC_URL}/settings?billing=success`,
-    cancel_url: `${process.env.NEXT_PUBLIC_URL}/settings`,
-    // trial_period_days must be nested inside subscription_data, not top-level
-    // on the Checkout Session — verified against the installed stripe package's
-    // SessionsResource.d.ts (SubscriptionData.trial_period_days).
-    subscription_data: {
-      trial_period_days: 14,
-      metadata: { workspace_id: workspace.id },
-    },
-    allow_promotion_codes: true,
-  })
+  let session: Stripe.Checkout.Session
+  try {
+    session = await getStripe().checkout.sessions.create({
+      customer: customerId,
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${process.env.NEXT_PUBLIC_URL}/settings?billing=success`,
+      cancel_url: `${process.env.NEXT_PUBLIC_URL}/settings`,
+      // trial_period_days must be nested inside subscription_data, not top-level
+      // on the Checkout Session — verified against the installed stripe package's
+      // SessionsResource.d.ts (SubscriptionData.trial_period_days).
+      subscription_data: {
+        trial_period_days: 14,
+        metadata: { workspace_id: workspace.id },
+      },
+      allow_promotion_codes: true,
+    })
+  } catch (err: any) {
+    // Found live: this call previously had no error handling at all — a
+    // malformed NEXT_PUBLIC_URL (Stripe requires an absolute URL with a
+    // scheme for success_url/cancel_url) threw StripeInvalidRequestError
+    // on every attempt, and with no catch here it surfaced as an
+    // unhandled 500 with zero explanation, while the frontend's own
+    // fetch just saw a non-ok response and showed a generic toast — the
+    // upgrade button spun and did nothing, with no way to tell why short
+    // of reading server logs. Same catch-and-explain shape as
+    // billing-portal/route.ts, which already had this right.
+    console.error('[create-checkout] Stripe error:', err)
+    if (err?.code === 'url_invalid') {
+      return jsonError('Server misconfiguration: NEXT_PUBLIC_URL is not a valid absolute URL. Contact support.', 503)
+    }
+    return jsonError('Could not start checkout — please try again', 500)
+  }
 
   return jsonOk({ url: session.url })
 }

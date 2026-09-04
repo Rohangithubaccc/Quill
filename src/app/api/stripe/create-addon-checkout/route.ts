@@ -96,37 +96,51 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Create one-time Checkout Session ───────────────────────────────────────
-  const session = await getStripe().checkout.sessions.create({
-    customer:    customerId,
-    mode:        'payment',
-    line_items:  [{ price: pack.priceId, quantity: 1 }],
+  // Found alongside the same gap in create-checkout/route.ts during a live
+  // test — this call had no try/catch either. Same fix, same reasoning:
+  // a Stripe error here (malformed success_url being the concrete case
+  // that surfaced it) previously threw unhandled straight past this
+  // route's own control flow.
+  let session: Stripe.Checkout.Session
+  try {
+    session = await getStripe().checkout.sessions.create({
+      customer:    customerId,
+      mode:        'payment',
+      line_items:  [{ price: pack.priceId, quantity: 1 }],
 
-    // workspace_id and credit amount must be in BOTH metadata locations:
-    // - session.metadata          → readable in the webhook event directly
-    // - payment_intent_data.metadata → on the PaymentIntent (fallback)
-    metadata: {
-      workspace_id:  ws.id,
-      addon_credits: pack.credits.toString(),
-      pack_size:     packSize,
-      type:          'credit_addon',   // webhook uses this to distinguish from subscriptions
-    },
-
-    payment_intent_data: {
+      // workspace_id and credit amount must be in BOTH metadata locations:
+      // - session.metadata          → readable in the webhook event directly
+      // - payment_intent_data.metadata → on the PaymentIntent (fallback)
       metadata: {
         workspace_id:  ws.id,
         addon_credits: pack.credits.toString(),
         pack_size:     packSize,
-        type:          'credit_addon',
+        type:          'credit_addon',   // webhook uses this to distinguish from subscriptions
       },
-    },
 
-    // Redirect back to generator — query params show a success toast
-    success_url: `${process.env.NEXT_PUBLIC_URL}/generator?addon=success&credits=${pack.credits}&pack=${packSize}`,
-    cancel_url:  `${process.env.NEXT_PUBLIC_URL}/generator?addon=cancelled`,
+      payment_intent_data: {
+        metadata: {
+          workspace_id:  ws.id,
+          addon_credits: pack.credits.toString(),
+          pack_size:     packSize,
+          type:          'credit_addon',
+        },
+      },
 
-    // Allow promo codes so you can run credit-pack promotions
-    allow_promotion_codes: true,
-  })
+      // Redirect back to generator — query params show a success toast
+      success_url: `${process.env.NEXT_PUBLIC_URL}/generator?addon=success&credits=${pack.credits}&pack=${packSize}`,
+      cancel_url:  `${process.env.NEXT_PUBLIC_URL}/generator?addon=cancelled`,
+
+      // Allow promo codes so you can run credit-pack promotions
+      allow_promotion_codes: true,
+    })
+  } catch (err: any) {
+    console.error('[addon-checkout] Stripe error:', err)
+    if (err?.code === 'url_invalid') {
+      return jsonError('Server misconfiguration: NEXT_PUBLIC_URL is not a valid absolute URL. Contact support.', 503)
+    }
+    return jsonError('Could not start checkout — please try again', 500)
+  }
 
   if (!session.url) {
     return jsonError('Failed to create Stripe checkout session', 500)

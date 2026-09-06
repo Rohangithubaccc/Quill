@@ -146,7 +146,19 @@ export async function POST(req: NextRequest) {
           plan:                    planInfo.plan,
           stripe_subscription_id:  sub.id,
           credits_monthly:         planInfo.credits,
-          usage_limit:             planInfo.credits,    // keep in sync for legacy reads
+          // NOT planInfo.credits directly — found live during Stage 3
+          // testing: a real Starter checkout produced "Monthly Usage:
+          // 0/120 pieces" in Settings, showing the credit count mislabeled
+          // as a piece count (a real customer could not actually create
+          // 120 blog posts a month on 120 credits, since content types
+          // cost different credit amounts). usage_limit and credits are
+          // different units; migration 012 already established the
+          // system's own conversion between them (`credits_monthly =
+          // usage_limit * 10`) when credits were introduced — dividing by
+          // that same 10 here keeps this webhook consistent with that
+          // existing ratio instead of inventing a new one, and matches
+          // exactly what the signup route already sets for Starter (12).
+          usage_limit:             Math.round(planInfo.credits / 10),
           storage_limit_bytes:     PLAN_STORAGE_LIMITS[planInfo.plan] ?? PLAN_STORAGE_LIMITS.starter,
           subscription_status:     sub.status,
           stripe_current_period_start: newPeriodStart,

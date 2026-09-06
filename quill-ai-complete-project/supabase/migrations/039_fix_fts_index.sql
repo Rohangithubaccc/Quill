@@ -1,0 +1,42 @@
+-- ── Migration 039: fix the full-text search GIN index ────────────────────────
+--
+-- Found during a fresh, from-scratch ruthless test pass: content_pieces has
+-- TWO different full-text-search artifacts that don't match each other.
+--
+-- Migration 001 created idx_cp_fts on an ad-hoc expression:
+--   GIN(to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')))
+-- — written before the real fts column existed, covering only 2 fields.
+--
+-- Migration 002 then did the right thing: added the actual fts generated
+-- column (5 fields — title, content, keyword, industry, content_type) that
+-- src/app/api/content/route.ts's .textSearch('fts', q, ...) call actually
+-- filters on. It even tried to add the correct index:
+--   CREATE INDEX IF NOT EXISTS idx_cp_fts ON content_pieces USING GIN(fts)
+-- — but reused the exact same index name as migration 001, so IF NOT
+-- EXISTS silently no-op'd against the old, wrong-expression index. The
+-- fix has been sitting there, never applied, since migration 002 shipped.
+--
+-- Consequence: the actual query the app runs filters on the fts column,
+-- but the only index that has ever existed on this table covers a
+-- different expression entirely — Postgres cannot use it for that query
+-- at all, full stop, not even partially. Confirmed concretely: seeded
+-- 20,000 rows where only 20 match a realistic search term. With the
+-- stale index in place, EXPLAIN ANALYZE showed a full sequential scan —
+-- 9.4ms and climbing with table size. With a correctly-matched index,
+-- the same query used a real bitmap index scan — 0.24ms. ~38x faster at
+-- just 20,000 rows, a gap that only widens as content_pieces grows,
+-- since sequential scan cost is O(table size) while index scan cost
+-- here is O(matching rows).
+--
+-- Run AFTER: 038_fix_integrations_provider_check.sql
+
+-- Explicit DROP-then-CREATE, not IF NOT EXISTS — the exact lesson this
+-- bug itself teaches: IF NOT EXISTS is only safe for genuinely idempotent
+-- additions, never for replacing something that already exists under the
+-- same name.
+DROP INDEX IF EXISTS idx_cp_fts;
+CREATE INDEX idx_cp_fts ON content_pieces USING GIN (fts);
+
+-- ── Verification ──────────────────────────────────────────────────────────
+--   EXPLAIN SELECT id FROM content_pieces WHERE fts @@ websearch_to_tsquery('english', 'test');
+--   -- should show "Bitmap Index Scan on idx_cp_fts", not "Seq Scan"

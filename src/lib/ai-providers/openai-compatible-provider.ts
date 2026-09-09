@@ -71,6 +71,42 @@ export class OpenAICompatibleProvider implements AIProviderClient {
     this.providerLabel = label ?? (baseURL ? new URL(baseURL).hostname : 'OpenAI')
   }
 
+  // NVIDIA's hosted NIM endpoint (integrate.api.nvidia.com) serves several
+  // Nemotron-family models that emit a full chain-of-thought reasoning
+  // trace as ordinary `content` deltas — there is no separate
+  // `reasoning_content` field to filter out on this API the way some
+  // reasoning proxies expose one. Confirmed directly in production: a real
+  // generation against nvidia/nemotron-3-super-120b-a12b (the platform
+  // default after llama-3.1-nemotron-70b-instruct was retired by NVIDIA)
+  // saved ~19,000 characters of raw reasoning — "We need to produce a
+  // Twitter thread about..." — as the actual content_pieces row, and the
+  // workspace was charged real credits for it.
+  //
+  // NVIDIA's own docs and the AWS Marketplace listing for this exact model
+  // confirm reasoning is controlled via
+  // extra_body.chat_template_kwargs.enable_thinking — NOT the plain-text
+  // "detailed thinking off" / "/no_think" system-prompt convention used by
+  // the older Nemotron 1.5 family (llama-3.1/3.3-nemotron-*). Quill.AI
+  // generates finished creative copy, never math/agentic reasoning, so
+  // thinking is switched off at the request level rather than filtered
+  // post-hoc — filtering would still burn the (often very large) reasoning
+  // token budget on every single generation.
+  //
+  // Deliberately scoped to NVIDIA's host only: sending an unrecognized
+  // extra_body field to other OpenAI-compatible backends (OpenAI itself,
+  // Gemini, Groq, self-hosted vLLM) risks a hard 400 on stricter
+  // implementations that don't silently ignore unknown top-level params.
+  private get extraBody(): Record<string, unknown> | undefined {
+    if (!this.baseURL) return undefined
+    try {
+      return new URL(this.baseURL).hostname === 'integrate.api.nvidia.com'
+        ? { chat_template_kwargs: { enable_thinking: false } }
+        : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   // Dynamic import matches this codebase's established lazy-instantiation
   // convention (see src/inngest/functions.ts's DALL-E call) — importing
   // the openai package must never run, or throw, at module load time.
@@ -81,13 +117,15 @@ export class OpenAICompatibleProvider implements AIProviderClient {
 
   async createCompletion(req: AICompletionRequest): Promise<AICompletionResult> {
     const client = await this.getClient()
-    const res = await client.chat.completions.create({
+    const params = {
       model:       req.model,
       max_tokens:  req.maxTokens,
       messages:    toOpenAIMessages(req),
       temperature: req.temperature,
-      stream:      false,
-    })
+      stream:      false as const,
+      ...(this.extraBody ? { extra_body: this.extraBody } : {}),
+    }
+    const res = await client.chat.completions.create(params)
     const choice = res.choices[0]
     return {
       text: choice?.message?.content ?? '',
@@ -100,18 +138,20 @@ export class OpenAICompatibleProvider implements AIProviderClient {
 
   async *streamCompletion(req: AICompletionRequest): AsyncGenerator<AIStreamEvent> {
     const client = await this.getClient()
-    const stream = await client.chat.completions.create({
+    const params = {
       model:       req.model,
       max_tokens:  req.maxTokens,
       messages:    toOpenAIMessages(req),
       temperature: req.temperature,
-      stream:      true,
+      stream:      true as const,
       // Without this, usage is omitted from streamed responses entirely on
       // OpenAI's own API (and most compatible backends follow the same
       // convention) — needed for the same cost/credit accounting parity
       // the Anthropic provider gets for free from message_start/delta.
       stream_options: { include_usage: true },
-    })
+      ...(this.extraBody ? { extra_body: this.extraBody } : {}),
+    }
+    const stream = await client.chat.completions.create(params)
 
     let inputTokens  = 0
     let outputTokens = 0

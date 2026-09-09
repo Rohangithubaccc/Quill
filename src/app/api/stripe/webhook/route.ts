@@ -100,6 +100,19 @@ export async function POST(req: NextRequest) {
         const newPeriodStart = sub.current_period_start
           ? new Date(sub.current_period_start * 1000).toISOString()
           : null
+        // Stage 3 item 4 surfaced that this webhook never captured either
+        // of these, despite Stripe sending both on every subscription
+        // object — meaning a Customer Portal cancellation (which defaults
+        // to "cancel at period end", not immediate) was completely
+        // invisible to the app right up until subscription.deleted fired
+        // and zeroed the workspace out with no warning. Synced
+        // unconditionally on every created/updated event, same as the
+        // other passthrough fields below — this is just reflecting
+        // Stripe's current state, never spending or granting anything, so
+        // it doesn't need the shouldResetCredits gate.
+        const newPeriodEnd = sub.current_period_end
+          ? new Date(sub.current_period_end * 1000).toISOString()
+          : null
 
         // Found during a ruthless adversarial pass: subscription.updated
         // fires for far more than plan changes and renewals — a payment
@@ -162,6 +175,8 @@ export async function POST(req: NextRequest) {
           storage_limit_bytes:     PLAN_STORAGE_LIMITS[planInfo.plan] ?? PLAN_STORAGE_LIMITS.starter,
           subscription_status:     sub.status,
           stripe_current_period_start: newPeriodStart,
+          stripe_current_period_end:   newPeriodEnd,
+          cancel_at_period_end:        sub.cancel_at_period_end,
           trial_ends_at:           sub.trial_end
             ? new Date(sub.trial_end * 1000).toISOString()
             : null,
@@ -193,6 +208,7 @@ export async function POST(req: NextRequest) {
           usage_limit:         0,
           storage_limit_bytes: PLAN_STORAGE_LIMITS.cancelled,
           subscription_status: 'cancelled',
+          cancel_at_period_end: false,
         }).eq('stripe_subscription_id', sub.id)
 
         if (cancelError) throw new Error(`Failed to cancel workspace for sub ${sub.id}: ${cancelError.message}`)

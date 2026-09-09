@@ -51,6 +51,7 @@ interface Workspace {
   brand_voice: string | null; industry: string | null; logo_url: string | null
   stripe_subscription_id: string | null; stripe_customer_id: string | null
   subscription_status: string | null; trial_ends_at: string | null
+  cancel_at_period_end: boolean; stripe_current_period_end: string | null
   deletion_requested_at: string | null; scheduled_purge_at: string | null
 }
 interface Integration { provider: string; status: string; config: Record<string, unknown> }
@@ -395,6 +396,7 @@ function SettingsPageInner() {
           storage_used_bytes, storage_limit_bytes,
           brand_voice, industry, logo_url,
           stripe_subscription_id, stripe_customer_id, subscription_status, trial_ends_at,
+          cancel_at_period_end, stripe_current_period_end,
           deletion_requested_at, scheduled_purge_at
         ),
         role
@@ -725,6 +727,28 @@ function SettingsPageInner() {
           </div>
         )}
 
+        {/* Scheduled-cancellation notice — subscription_status stays 'active'
+            right up until the period actually ends, so without this the
+            customer has no indication anything is scheduled at all. Amber,
+            not red: this is an expected state the customer chose, not an
+            error like payment failure above. */}
+        {workspace?.cancel_at_period_end && (
+          <div style={{ background:'rgba(245,200,66,0.1)', border:'1px solid rgba(245,200,66,0.3)', borderRadius:'10px', padding:'14px 18px', marginBottom:'16px', display:'flex', alignItems:'center', gap:'12px' }}>
+            <span style={{ fontSize:'20px' }}>⏳</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontWeight:700, color:'#f5c842', fontSize:'14px' }}>
+                Your plan is set to cancel{workspace.stripe_current_period_end
+                  ? ` on ${new Date(workspace.stripe_current_period_end).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}`
+                  : ' at the end of your billing period'}
+              </div>
+              <div style={{ fontSize:'12px', color:'#7c7c9a', marginTop:'2px' }}>You&apos;ll keep full access until then. Changed your mind? You can resume anytime before that date.</div>
+            </div>
+            <button onClick={openBillingPortal} disabled={billingLoading} style={{ ...S.btnPrimary, whiteSpace:'nowrap', opacity:billingLoading?0.7:1 }}>
+              {billingLoading ? '⏳ Opening…' : 'Resume Plan →'}
+            </button>
+          </div>
+        )}
+
         {/* Current plan card */}
         <div style={{ background:'#1e1e28', border:'1px solid #2a2a3a', borderRadius:'12px', padding:'20px', marginBottom:'12px' }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'12px' }}>
@@ -742,6 +766,11 @@ function SettingsPageInner() {
                   {workspace?.trial_ends_at && subStatus==='trialing' && (
                     <span style={{ fontSize:'12px', color:'#4a4a65' }}>
                       · Trial ends {new Date(workspace.trial_ends_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}
+                    </span>
+                  )}
+                  {workspace?.cancel_at_period_end && workspace?.stripe_current_period_end && (
+                    <span style={{ fontSize:'12px', color:'#f5c842' }}>
+                      · Cancels {new Date(workspace.stripe_current_period_end).toLocaleDateString('en-US',{month:'short',day:'numeric'})}
                     </span>
                   )}
                 </div>

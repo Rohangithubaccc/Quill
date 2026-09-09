@@ -470,6 +470,29 @@ ${fullText.substring(0, 1500)}
 
       } catch (err: any) {
         console.error('[generate] Stream error:', err)
+        // The content_pieces row was created before streaming started
+        // (step 8, above) so the client has an id to reference — but that
+        // means any failure here (provider outage, a bad model config, a
+        // validation error) otherwise leaves a permanent orphaned row
+        // behind: status 'draft', title and content both null, visible in
+        // Recent Content and Review Queue until someone notices and
+        // manually cleans it up. Confirmed in production during testing:
+        // this exact scenario happened from an unrelated provider-config
+        // error and left a blank draft sitting in the workspace.
+        //
+        // Soft-deleted the same way every other deletion in this app
+        // works (deleted_at, never a hard delete) — recoverable/auditable
+        // if genuinely needed, just hidden from anything that filters on
+        // deleted_at IS NULL. Guarded on content IS NULL specifically so
+        // this can never soft-delete a row that already received its real
+        // content — only a failure between the insert and that update
+        // (the only window where content is still null) should ever
+        // trigger this.
+        Promise.resolve(admin.from('content_pieces')
+          .update({ deleted_at: new Date().toISOString() })
+          .eq('id', piece.id)
+          .is('content', null)
+        ).catch(() => {})
         controller.enqueue(encoder.encode(
           `data: ${JSON.stringify({ type: 'error', error: err.message ?? 'Generation failed' })}\n\n`
         ))

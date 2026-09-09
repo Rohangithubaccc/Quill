@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
+import { onCreditsChanged } from '@/lib/credits-events'
 
 interface WorkspaceInfo {
   id:                string
@@ -70,7 +71,14 @@ export default function Sidebar() {
       }
     }
     document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    // Generate/image/bulk-repurpose all live outside this component and
+    // have no other way to tell it their action just spent credits — see
+    // credits-events.ts for why this exists instead of a shared context.
+    const unsubscribe = onCreditsChanged(fetchData)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      unsubscribe()
+    }
   }, [])
 
   async function fetchData() {

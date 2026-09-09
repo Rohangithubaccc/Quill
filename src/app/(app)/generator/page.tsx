@@ -11,6 +11,7 @@ import { countWords } from '@/lib/utils'
 import UpgradeModal from '@/components/ui/UpgradeModal'
 import { GenerationCelebration } from '@/components/onboarding/GenerationCelebration'
 import { track } from '@/lib/posthog'
+import { notifyCreditsChanged } from '@/lib/credits-events'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -542,6 +543,7 @@ function GeneratorPageInner() {
           word_count: wc, tone: brief.tone, platforms: brief.platforms,
         })
         showToast('Content generated!', 'success')
+        notifyCreditsChanged()
         fetchVersions(cid)
       },
       (status) => setReconnectMsg(status),
@@ -705,6 +707,7 @@ function GeneratorPageInner() {
         // Sync fallback (direct result without queuing)
         setHeaderImage(data.imageUrl)
         showToast('Header image generated (5 credits)', 'success')
+        notifyCreditsChanged()
       }
     } catch { setImageError('Network error — please try again') }
     finally { setGeneratingImage(false); setImageStatusMsg('') }
@@ -766,6 +769,7 @@ function GeneratorPageInner() {
             setBulkResults(pieces)
             const done = pieces.filter((p: any) => p.pieceId).length
             showToast(`✓ ${done} repurposed variant${done !== 1 ? 's' : ''} created — view in your library`, 'success')
+            notifyCreditsChanged()
             resolve()
           } else if (job.status === 'failed') {
             clearInterval(iv); setBulkJobId(null)
@@ -799,6 +803,7 @@ function GeneratorPageInner() {
             setHeaderImage(job.result.imageUrl)
             setImageJobId(null)
             showToast('Header image generated (5 credits)', 'success')
+            notifyCreditsChanged()
             resolve()
           } else if (job.status === 'failed') {
             clearInterval(interval)

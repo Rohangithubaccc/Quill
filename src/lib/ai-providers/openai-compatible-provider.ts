@@ -82,21 +82,28 @@ export class OpenAICompatibleProvider implements AIProviderClient {
   // Twitter thread about..." — as the actual content_pieces row, and the
   // workspace was charged real credits for it.
   //
-  // NVIDIA's own docs and the AWS Marketplace listing for this exact model
-  // confirm reasoning is controlled via
-  // extra_body.chat_template_kwargs.enable_thinking — NOT the plain-text
-  // "detailed thinking off" / "/no_think" system-prompt convention used by
-  // the older Nemotron 1.5 family (llama-3.1/3.3-nemotron-*). Quill.AI
-  // generates finished creative copy, never math/agentic reasoning, so
-  // thinking is switched off at the request level rather than filtered
-  // post-hoc — filtering would still burn the (often very large) reasoning
-  // token budget on every single generation.
+  // NVIDIA's docs and a working Node example against this exact endpoint
+  // confirm chat_template_kwargs.enable_thinking must be a LITERAL
+  // TOP-LEVEL field in the JSON body, sent as a plain property alongside
+  // model/messages/temperature — not the older Nemotron 1.5 family's
+  // plain-text "detailed thinking off" system-prompt convention, and
+  // critically NOT wrapped in an `extra_body` key. `extra_body` is a
+  // Python-openai-SDK-only convenience the *client library* unwraps before
+  // sending the request — it isn't a real field on the wire, and the Node
+  // SDK used here has no equivalent unwrapping. Sending it as a literal
+  // key (an earlier version of this fix did exactly that) produces "400
+  // Validation: Unsupported parameter(s): `extra_body`" from NVIDIA's own
+  // validation, confirmed against the live endpoint. Quill.AI generates
+  // finished creative copy, never math/agentic reasoning, so thinking is
+  // switched off at the request level rather than filtered post-hoc —
+  // filtering would still burn the (often very large) reasoning token
+  // budget on every single generation.
   //
   // Deliberately scoped to NVIDIA's host only: sending an unrecognized
-  // extra_body field to other OpenAI-compatible backends (OpenAI itself,
-  // Gemini, Groq, self-hosted vLLM) risks a hard 400 on stricter
-  // implementations that don't silently ignore unknown top-level params.
-  private get extraBody(): Record<string, unknown> | undefined {
+  // top-level field to other OpenAI-compatible backends (OpenAI itself,
+  // Gemini, Groq, self-hosted vLLM) risks the same class of hard 400 on
+  // stricter implementations that don't silently ignore unknown params.
+  private get providerSpecificParams(): Record<string, unknown> | undefined {
     if (!this.baseURL) return undefined
     try {
       return new URL(this.baseURL).hostname === 'integrate.api.nvidia.com'
@@ -123,7 +130,7 @@ export class OpenAICompatibleProvider implements AIProviderClient {
       messages:    toOpenAIMessages(req),
       temperature: req.temperature,
       stream:      false as const,
-      ...(this.extraBody ? { extra_body: this.extraBody } : {}),
+      ...(this.providerSpecificParams ?? {}),
     }
     const res = await client.chat.completions.create(params)
     const choice = res.choices[0]
@@ -149,7 +156,7 @@ export class OpenAICompatibleProvider implements AIProviderClient {
       // convention) — needed for the same cost/credit accounting parity
       // the Anthropic provider gets for free from message_start/delta.
       stream_options: { include_usage: true },
-      ...(this.extraBody ? { extra_body: this.extraBody } : {}),
+      ...(this.providerSpecificParams ?? {}),
     }
     const stream = await client.chat.completions.create(params)
 

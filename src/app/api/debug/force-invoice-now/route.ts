@@ -3,13 +3,20 @@ import Stripe from 'stripe'
 import { requireUser, requireWorkspace } from '@/lib/supabase/server'
 import { jsonError, workspaceCatch } from '@/lib/utils'
 
-// TEMPORARY — Stage 3 item 6, take two. The trial-end trigger (now
-// deleted) converted the subscription to active and successfully charged
-// the original card before the decline card had been set as default —
-// trial_end can only be forced once, so a fresh invoice is the only way
-// left to force another collection attempt without waiting for the real
-// Oct 10 renewal. Same disposable pattern: authenticated, scoped only to
-// the caller's own workspace, removed once the test is done.
+// TEMPORARY — Stage 3 item 6, take three. Take two (manual invoice
+// creation) found nothing to bill: the subscription's current period was
+// already fully paid from the trial-end trigger, so a fresh invoice for
+// that same subscription came back $0-due and auto-marked "paid" before
+// we even attempted payment — Stripe doesn't require collection on a
+// zero-amount invoice. Manually creating invoices was the wrong tool.
+//
+// billing_cycle_anchor: 'now' is the correct primitive: it closes out the
+// current period early and opens a genuinely new one starting this
+// instant, which is what actually makes Stripe attempt to charge the
+// current default payment method for a new period — not just re-invoice
+// a period that's already settled. Same disposable pattern as the rest of
+// this saga: authenticated, scoped to the caller's own workspace, removed
+// once the test is done.
 let _stripe: Stripe | null = null
 function getStripe(): Stripe {
   if (!_stripe) _stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
@@ -30,35 +37,26 @@ export async function POST() {
 
   const stripe = getStripe()
 
-  // Confirm what's actually set as default before charging anything —
-  // this is exactly the check that would have caught the first attempt's
-  // problem before it happened, rather than after.
-  const customer = await stripe.customers.retrieve(ws.stripe_customer_id) as Stripe.Customer
-  const defaultPm = customer.invoice_settings?.default_payment_method
-  const pmId = typeof defaultPm === 'string' ? defaultPm : defaultPm?.id
-  const pm = pmId ? await stripe.paymentMethods.retrieve(pmId) : null
+  // Dump the raw payment method data rather than guessing at a field path
+  // again — the last attempt's default_payment_method_last4 came back
+  // null even with a populated id, which given this account's history of
+  // API-version-dependent field placement (see the period-fields saga) is
+  // more likely an unexpected shape than a real absence.
+  const customer = await stripe.customers.retrieve(ws.stripe_customer_id) as any
+  const defaultPmId = typeof customer.invoice_settings?.default_payment_method === 'string'
+    ? customer.invoice_settings.default_payment_method
+    : customer.invoice_settings?.default_payment_method?.id
+  const pm = defaultPmId ? await stripe.paymentMethods.retrieve(defaultPmId) as any : null
 
-  const invoice = await stripe.invoices.create({
-    customer: ws.stripe_customer_id,
-    subscription: ws.stripe_subscription_id,
-    auto_advance: true,
-  })
-  const finalized = await stripe.invoices.finalizeInvoice(invoice.id!)
-
-  let paidInvoice: Stripe.Invoice | null = null
-  let payError: string | null = null
-  try {
-    paidInvoice = await stripe.invoices.pay(finalized.id!)
-  } catch (e: any) {
-    payError = e.message
-  }
+  const updated = await stripe.subscriptions.update(ws.stripe_subscription_id, {
+    billing_cycle_anchor: 'now',
+    proration_behavior: 'none',
+  }) as any
 
   return NextResponse.json({
-    default_payment_method_last4: pm && pm.card ? pm.card.last4 : null,
-    default_payment_method_id:    pmId ?? null,
-    invoice_id: finalized.id,
-    invoice_status_before_pay: finalized.status,
-    pay_attempt_error: payError,
-    invoice_status_after_pay: paidInvoice?.status ?? null,
+    default_payment_method_id: defaultPmId ?? null,
+    default_payment_method_raw: pm ?? null,
+    subscription_status: updated.status,
+    latest_invoice_id: updated.latest_invoice ?? null,
   })
 }

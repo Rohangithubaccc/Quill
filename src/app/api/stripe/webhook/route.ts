@@ -97,8 +97,24 @@ export async function POST(req: NextRequest) {
 
         const priceId  = sub.items.data[0]?.price.id ?? ''
         const planInfo = PLAN_LIMITS[priceId] ?? { plan: 'starter', credits: PLAN_CREDITS.starter }
-        const newPeriodStart = sub.current_period_start
-          ? new Date(sub.current_period_start * 1000).toISOString()
+        // Confirmed via a direct dump of this account's actual webhook
+        // payload (see /api/debug/stripe-period-check?event=... during
+        // Stage 3 item 4): this webhook endpoint is pinned to API version
+        // 2026-08-26.dahlia, under which sub.current_period_start/end are
+        // null on the Subscription object itself — Stripe moved these
+        // onto each subscription item (to support multiple prices with
+        // independent billing cycles per subscription), and the stripe
+        // npm SDK here (v17.3.1) predates that change, so its types don't
+        // know about it either, hence the cast. Every subscription this
+        // app creates has exactly one price/item, so item[0] is
+        // authoritative; falling back to the legacy top-level fields
+        // costs nothing and keeps this working if the webhook's pinned
+        // version is ever set back to something older.
+        const periodItem = sub.items.data[0] as any
+        const rawPeriodStart = periodItem?.current_period_start ?? sub.current_period_start
+        const rawPeriodEnd   = periodItem?.current_period_end   ?? sub.current_period_end
+        const newPeriodStart = rawPeriodStart
+          ? new Date(rawPeriodStart * 1000).toISOString()
           : null
         // Stage 3 item 4 surfaced that this webhook never captured either
         // of these, despite Stripe sending both on every subscription
@@ -110,8 +126,8 @@ export async function POST(req: NextRequest) {
         // other passthrough fields below — this is just reflecting
         // Stripe's current state, never spending or granting anything, so
         // it doesn't need the shouldResetCredits gate.
-        const newPeriodEnd = sub.current_period_end
-          ? new Date(sub.current_period_end * 1000).toISOString()
+        const newPeriodEnd = rawPeriodEnd
+          ? new Date(rawPeriodEnd * 1000).toISOString()
           : null
 
         // Found during a ruthless adversarial pass: subscription.updated

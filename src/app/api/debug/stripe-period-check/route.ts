@@ -13,7 +13,32 @@ function getStripe(): Stripe {
   return _stripe
 }
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
+  // ?event=evt_... — inspect the exact webhook payload as Stripe actually
+  // delivered it (including the API version *that event* was generated
+  // under), rather than a fresh subscription fetch. Webhook endpoints pin
+  // their own API version at creation time in the Stripe dashboard, which
+  // can silently differ from the account's current default that a plain
+  // stripe.subscriptions.retrieve() call uses — this is the only way to
+  // see what the webhook handler itself actually received. No auth
+  // required for this specific mode: purely diagnostic, temporary, reads
+  // only Stripe's own event log by a known event id.
+  const eventId = req.nextUrl.searchParams.get('event')
+  if (eventId) {
+    const event = await getStripe().events.retrieve(eventId)
+    const obj = event.data.object as any
+    return NextResponse.json({
+      event_api_version: event.api_version,
+      event_type: event.type,
+      object_current_period_start: obj.current_period_start ?? null,
+      object_current_period_end:   obj.current_period_end   ?? null,
+      object_status: obj.status,
+      object_cancel_at_period_end: obj.cancel_at_period_end,
+      item_current_period_start: obj.items?.data?.[0]?.current_period_start ?? null,
+      item_current_period_end:   obj.items?.data?.[0]?.current_period_end   ?? null,
+    })
+  }
+
   let user
   try { user = await requireUser() } catch { return jsonError('Unauthorized', 401) }
   let workspace: any

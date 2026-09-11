@@ -1,0 +1,61 @@
+-- ============================================================
+-- Quill.AI Migration 005 — Email Verification Configuration
+-- ============================================================
+--
+-- NO SCHEMA CHANGES IN THIS FILE.
+-- Email verification is handled entirely by Supabase Auth.
+-- The auth.users table already has an email_confirmed_at column.
+--
+-- ── Required Supabase Dashboard configuration ─────────────────────────────
+--
+-- 1. Enable email confirmation:
+--    Authentication → Providers → Email
+--    → Toggle "Confirm email" to ON
+--    → Save
+--
+-- 2. Set the redirect URL (used in the confirmation email link):
+--    Authentication → URL Configuration
+--    → Site URL:      https://your-domain.com
+--    → Redirect URLs: https://your-domain.com/api/auth/callback
+--
+--    This URL is also passed as emailRedirectTo in supabase.auth.signUp()
+--    and supabase.auth.resend() in the API routes.
+--
+--    For local development, also add:
+--      http://localhost:3000/api/auth/callback
+--
+-- 3. Customise the confirmation email (optional but recommended):
+--    Authentication → Email Templates → Confirm signup
+--    → Update subject line and body to match Quill.AI branding
+--    → The {{ .ConfirmationURL }} token must remain in the template
+--
+-- ── How it works after this change ───────────────────────────────────────
+--
+-- 1. User submits the signup form.
+-- 2. /api/auth/signup creates the user via supabase.auth.signUp(),
+--    which sends a confirmation email automatically.
+-- 3. The user is redirected to /verify-email?email=... (a holding page).
+-- 4. The user clicks the link in the email.
+-- 5. Supabase redirects them to /api/auth/callback which sets the session.
+-- 6. Middleware checks user.email_confirmed_at on every request:
+--    - null   → redirect to /verify-email (cannot access the app)
+--    - set    → allow through to the dashboard
+--
+-- ── Verifying the configuration ───────────────────────────────────────────
+--
+-- Run this query in the Supabase SQL Editor to see unconfirmed accounts:
+--
+--   SELECT id, email, email_confirmed_at, created_at
+--   FROM auth.users
+--   WHERE email_confirmed_at IS NULL
+--   ORDER BY created_at DESC
+--   LIMIT 20;
+--
+-- ── Environment variables required ────────────────────────────────────────
+--
+--   NEXT_PUBLIC_URL         = https://your-domain.com
+--   RESEND_API_KEY          = re_...     (for resend-verification endpoint)
+--   UPSTASH_REDIS_REST_URL  = https://...
+--   UPSTASH_REDIS_REST_TOKEN = ...
+--
+-- ============================================================

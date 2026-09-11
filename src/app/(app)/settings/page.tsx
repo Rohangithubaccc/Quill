@@ -61,7 +61,10 @@ interface PendingInvite { id: string; email: string; role: string; expires_at: s
 const INTEGRATIONS_META = [
   { provider:'linkedin',  name:'LinkedIn',  icon:'🔷', type:'oauth',     note:'60-day tokens · Reconnect monthly',         desc:'Publish directly to LinkedIn. No Buffer required.' },
   { provider:'wordpress', name:'WordPress', icon:'🌐', type:'form',      note:'',                                           desc:'Publish blog posts to your WordPress site.' },
-  { provider:'buffer',    name:'Buffer',    icon:'📱', type:'oauth',     note:'',                                           desc:'Schedule to LinkedIn, X, Instagram, Facebook.' },
+  { provider:'buffer',    name:'Buffer',    icon:'📱', type:'oauth',     note:'',                                           desc:'Schedule to LinkedIn, X, Instagram, Facebook.' }
+  { provider: 'gsc', name: 'Google Search Console', icon: '??', type: 'oauth', note: '' },
+  { provider: 'gsc', name: 'Google Search Console', icon: '??', type: 'oauth', note: '' },,
+  { provider: 'gsc', name: 'Google Search Console', icon: '??', type: 'oauth', note: '' },
   { provider:'hubspot',   name:'HubSpot',   icon:'🟠', type:'waitlist',  note:'',                                           desc:'Sync content to your HubSpot CRM.' },
   { provider:'mailchimp', name:'Mailchimp', icon:'🐵', type:'waitlist',  note:'',                                           desc:'Send newsletters via Mailchimp.' },
   { provider:'hootsuite', name:'Hootsuite', icon:'🦉', type:'waitlist',  note:'',                                           desc:'Advanced social scheduling.' },
@@ -1764,3 +1767,5 @@ export default function SettingsPage() {
     </Suspense>
   )
 }
+
+
